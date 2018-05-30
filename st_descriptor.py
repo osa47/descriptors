@@ -1,4 +1,6 @@
 #!/usr/bin/env
+
+from df_aggregator import aggregator
 import pandas as pd
 import numpy as np
 from scipy import stats
@@ -147,7 +149,17 @@ def categorical_chi_square(df, categorical, binary, observed='observed'):
 
 
 # Categorials / binaries features comparison, chi-square criteria
+# Chi-square (non-parametric crit.) tests if observed values are close to expected values
 #
+# Input format:
+# list of dicts, where each dict discribes 'task' for aggregator function (transforms dataframe to aggregated view according
+# to group-parameter(s), parameter to aggregate and aggregation function)
+#
+# Output format:
+#
+# dataframe of chi-square pvalue for double groupping of data by categorial and binary features
+#
+
 def categoricals_comparisons(tasks):
     table = []
     for task in tasks:
@@ -162,6 +174,19 @@ def categoricals_comparisons(tasks):
 
 
 # Metric multi-groups comparison (parametric/non-parametric tests)
+# Function estimates multi-groups average-measures if they are the same. For metric variables of normal distribution
+# One-Way ANOVA test is performed, for non-normally distributed metric variables performed non-parametric analogy of ANOVA test
+# - Kruskal Wallis test
+#
+# Input format:
+# df - dataframe
+# metrics - list of metric-variables
+# categories - list of categorial variables
+#
+# Output format:
+#
+# tuple of dataframed results and its styler
+
 def disp_analysis(df, metrics, categories):
     results = []
     for metric in metrics:
@@ -181,5 +206,5 @@ def disp_analysis(df, metrics, categories):
                 results.append([metric, cat, statistic, pvalue])
     results = pd.DataFrame(results)
     results.columns = ['Metric_F', 'Category_F', 'statistics', 'pvalue']
-    results = results.style.applymap(color_sign_red, subset=['pvalue'])
-    return results
+    results_styler = results.style.applymap(color_sign_red, subset=['pvalue'])
+    return results, results_styler
