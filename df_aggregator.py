@@ -59,9 +59,14 @@ def aggregator(params):
     pars = params['pars']
     funcs = params['funcs']
     rename = params['rename']
+
     categorizer = None
     if 'categorizer' in params:
-        categorizer = params['categorizer']
+        if len(params['categorizer'])==1:
+            categorizer = params['categorizer']
+        else:
+            categorizer = '|'.join(params['categorizer'])
+
     tmp = df[:]
     for gr, par, func in zip(groups, pars, funcs):
         # print gr, par, func
@@ -76,6 +81,14 @@ def aggregator(params):
 
         value = list(tmp.columns).pop()
         key = list(tmp.columns).pop(0)
+
+        if len(params['categorizer'])>1:
+            tmp[categorizer]=''
+            for sub_cat in params['categorizer']:
+                tmp[categorizer]+=tmp[sub_cat]
+                tmp[categorizer]+='|'
+                del tmp[sub_cat]
+            tmp[categorizer]=tmp[categorizer].apply(lambda x:x.strip('|'))
 
         cats = tmp[categorizer].unique()
         cols = list(tmp.columns)
@@ -99,13 +112,25 @@ def aggregator(params):
     return tmp
 
 
-#def periodations(func, pars, sorted_periods, step):
-#    dfs = []
-#    global_df = pars['df'][:]
-#    for n, i in enumerate(xrange(len(sorted_periods) - step +1)):
-#        pars['df'] = global_df[global_df['month_year'].isin(sorted_periods[i:i + step])]
-#        dfs.append(func(pars))
-#    return dfs
+# function splits dataframe according to some period-categorized feature so that this feature rakes not one,
+# but a scope of its values
+#
+# Input format:
+#
+# global_df - dataframe to split
+# sorted_periods - sorted list of feature labels to split (date-time, sorted months...)
+# feat_name - name of the splitting feature
+# step - amount of sub-labels of a feature to be presented in a dataframe slice
+#
+# Output format:
+#
+# sliced dataframe, an iterator-element
+#
+
+def periodations(global_df, sorted_periods, feat_name, step):
+    for n, i in enumerate(xrange(len(sorted_periods) - step +1)):
+        subdf = global_df[global_df[feat_name].isin(sorted_periods[i:i + step])]
+        yield subdf
 
 
 # function merges several dataframes into one
