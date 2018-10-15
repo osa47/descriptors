@@ -63,7 +63,7 @@ def aggregator(params):
     categorizer = None
     if 'categorizer' in params:
         if len(params['categorizer'])==1:
-            categorizer = params['categorizer']
+            categorizer = params['categorizer'].pop()
         else:
             categorizer = '|'.join(params['categorizer'])
 
@@ -101,7 +101,7 @@ def aggregator(params):
         for cat in cats:
             d = tmp[tmp[categorizer] == cat][cols]
             if len(d[key].unique()) > shape_norma:
-                d = d.rename(columns={value: "%s_%s" % (cat, value)})
+                d = d.rename(columns={value: "%s|%s" % (cat, value)})
                 if final is None:
                     final = d[:]
                 else:
@@ -120,7 +120,7 @@ def aggregator(params):
 # global_df - dataframe to split
 # sorted_periods - sorted list of feature labels to split (date-time, sorted months...)
 # feat_name - name of the splitting feature
-# step - amount of sub-labels of a feature to be presented in a dataframe slice
+# step - amount of sub-labels of a feature to be presented in a dataframe slice (window width)
 #
 # Output format:
 #

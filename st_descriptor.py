@@ -4,6 +4,11 @@ from df_aggregator import aggregator
 import pandas as pd
 import numpy as np
 from scipy import stats
+from scipy.stats import spearmanr, pearsonr
+from scipy.sparse import csr_matrix, csgraph
+from itertools import combinations
+from datetime import datetime as dt
+from tqdm import tqdm
 # it is better to rewrite in arrays, not dataframes
 
 from sklearn import metrics
@@ -56,7 +61,7 @@ def pairwise_comparison(df, f_name, groupper='target'):
     groups_stats.columns = ['StatName', 'Group1', 'Group0']
     styler = groups_stats.style.applymap(color_sign_red, subset=pd.IndexSlice[4:4, ['Group0']])
 
-    return groups_stats,styler
+    return groups_stats,styler,pvalue
 
 
 # 2 metric features comparison (correlations - parametric/non-parametric tests)
@@ -72,12 +77,13 @@ def pairwise_comparison(df, f_name, groupper='target'):
 # features - list of features to estimate (each with each)
 #
 # Output format:
-# two tuples
-# - first tuple of 3 tables
-# - second tuple contains stylers for each table
+# three tuples
+# - first tuple of 2 lists: statistically non correlated according to Pearson test, statistically correlated
+# - second tuple of 2 lists: statistically non correlated according to Spearman test, statistically correlated
+# - third tuple of dataframe and styler for mutual information statistics
 #
 
-def correlations(df, features):
+def correlations(df, features,crit_val=0.05):
     # Pearson correlation measures the linear association between continuous variables
     # Spearman's correlation measures monotonic association (only strictly increasing or decreasing,
     # but not mixed) between two variables and relies on the rank order of values.
@@ -88,43 +94,44 @@ def correlations(df, features):
         color = 'red' if val >= criterio else 'black'
         return 'color: %s' % color
 
-    mutuals = np.zeros((len(features), len(features)))
-    pearson = np.zeros((len(features), len(features)))
-    spearman = np.zeros((len(features), len(features)))
-    for n1, feat1 in enumerate(features):
+    combs =  combinations(features,2)
+
+    mutuals = [] #np.zeros((len(features), len(features)))
+    pearson_N = [] #np.zeros((len(features), len(features)))
+    pearson_Y = []
+    spearman_N = [] #np.zeros((len(features), len(features)))
+    spearman_Y=[]
+
+    for comb in combs:
         pearson_flag = False
-        _, pval = stats.normaltest(df[feat1].values)
+        _, pval = stats.normaltest(df[comb[0]].values)
         if pval > 0.05:
             pearson_flag = True
-        spearman[n1][n1] = 0.
-        for n2, feat2 in enumerate(features):
-            if n2 != n1:
-                if pearson_flag:
-                    _, pval = stats.normaltest(df[feat2].values)
-                    if pval > 0.05:
-                        pear, pearval = stats.pearsonr(df[feat1].values, df[feat2].values)
-                        pearson[n1][n2] = pearval
-                spear, spearval = stats.spearmanr(df[feat1].values, df[feat2].values)
-                spearman[n1][n2] = spearval
-            mutuals[n1][n2] = metrics.mutual_info_score(((df[feat1] - df[feat1].mean()) / df[feat1].std()).values,
-                                                        ((df[feat2] - df[feat2].mean()) / df[feat2].std()).values)
-    pearson = pd.DataFrame(pearson)
-    pearson.index = features
-    pearson.columns = features
-    pearson_styler = pearson.style.applymap(color_sign_red)
+        _, pval = stats.normaltest(df[comb[1]].values)
+        if ((pval > 0.05) and (pearson_flag)):
+            pearson_flag = True
+            pear, pearval = stats.pearsonr(df[comb[0]].values, df[comb[1]].values)
+            if pearval < 0.05:
+                pearson_Y.append([comb[0],comb[1], pearval])
+            else:
+                pearson_N.append([comb[0], comb[1], pearval])
 
-    spearman = pd.DataFrame(spearman)
-    spearman.index = features
-    spearman.columns = features
-    spearman_styler = spearman.style.applymap(color_sign_red)
+        spear, spearval = stats.spearmanr(df[comb[0]].values, df[comb[1]].values)
+        if spearval<crit_val:
+            spearman_Y.append([comb[0], comb[1], spearval])
+        else:
+            spearman_N.append([comb[0], comb[1], spearval])
+        mutuals.append([comb[0], comb[1], metrics.mutual_info_score(((df[comb[0]] - df[comb[0]].mean()) / df[comb[0]].std()).values,
+                                                ((df[comb[1]] - df[comb[1]].mean()) / df[comb[1]].std()).values)])
 
-    criterio = mutuals.mean() + 2 * mutuals.std()
+
+
     mutuals = pd.DataFrame(mutuals)
-    mutuals.index = features
-    mutuals.columns = features
-    mutuals_styler = mutuals.style.applymap(color_with_criterio)
+    mutuals.columns = ['col1','col2','mutual']
+    criterio = mutuals['mutual'].mean() + 2 * mutuals['mutual'].std()
+    mutuals_styler = mutuals.style.applymap(color_with_criterio,subset=['mutual'])
 
-    return (pearson, spearman, mutuals),(pearson_styler,spearman_styler,mutuals_styler)
+    return (pearson_N, pearson_Y), (spearman_N, spearman_Y),(mutuals,mutuals_styler)
 
 
 # function used in categoricals_comparisons
@@ -208,3 +215,148 @@ def disp_analysis(df, metrics, categories):
     results.columns = ['Metric_F', 'Category_F', 'statistics', 'pvalue']
     results_styler = results.style.applymap(color_sign_red, subset=['pvalue'])
     return results, results_styler
+
+
+# Function checks outliers
+#
+
+def check_outs(df, col, label):
+    Q1 = np.percentile(df[col], 25)
+    Q3 = np.percentile(df[col], 75)
+    lower = Q1 - 1.5 * (Q3 - Q1)
+    upper = Q3 + 1.5 * (Q3 - Q1)
+    print 'lower border = {}, upper border = {}'.format(lower, upper)
+    inners = set(df[(df[col] <= upper) & (df[col] >= lower)][label].unique())
+    print 'amount of saved columns = {}'.format(float(len(inners)) / df.shape[0])
+    bad_lables = set(df[label].unique()) - inners
+    return bad_lables
+
+
+def normalize_by_row(true_df, columns):
+    df = (true_df[columns]).T
+    for col in df.columns:
+        tmp = df[col].max() - df[col].min()
+        if tmp == 0.:
+            tmp = 1.
+        df[col] = (df[col] - df[col].min()) / tmp
+    return df.T
+
+
+def normalize_by_columns(df, columns):
+    for col in columns:
+        z = (df[col].max() - df[col].min())
+        if z == 0.:
+            z = 1.
+        df[col] = (df[col] - df[col].min()) / z
+    return df
+
+
+def descript_cols_on_nulls(df, cols):
+    categorial_cols_stats = []
+    for col in cols:
+        categorial_cols_stats.append([col, float(df[df[col] > 0.][col].count()) \
+                                      / df.shape[0]])
+    categorial_cols_stats = pd.DataFrame(categorial_cols_stats)
+    categorial_cols_stats.columns = ['cat_col_name', '%notnull']
+    return categorial_cols_stats
+
+
+def outliers_by_outlier_cnt(subdf, all_columns):
+    st = dt.now()
+    outlier_pretendents = []
+    for col in all_columns:
+        pretendets = check_outs(subdf, col, 'user_id')
+
+        outlier_pretendents += list(pretendets)
+    outlier_pretendents = {item: outlier_pretendents.count(item) for \
+                           item in set(outlier_pretendents)}
+    outlier_pretendents_df = pd.DataFrame(outlier_pretendents.items())
+    outlier_pretendents_df.columns = ['user_id', 'outling_facts_cnt']
+    too_often_outliers = check_outs(outlier_pretendents_df, 'outling_facts_cnt', 'user_id')
+    print 'percentage of outliers = {}'.format(float(len(too_often_outliers)) / \
+                                               outlier_pretendents_df.shape[0])
+    print 'performance = {}'.format(dt.now() - st)
+    return outlier_pretendents_df, too_often_outliers
+
+
+def check_if_normal(df, cols, alpha=0.05):
+    cols_stats = []
+    for col in cols:
+        statistica, pval = stats.normaltest(df[col])
+        if pval < alpha:
+            status = 'Not Normal'
+        else:
+            status = 'Normal'
+        cols_stats.append([col, statistica, pval, status])
+    cols_stats = pd.DataFrame(cols_stats)
+    cols_stats.columns = ['col_name', 'statistics', 'pvalue', 'H0_status']
+    return cols_stats
+
+
+def nonparametric_check_for_d_similarity(df1, df2, alpha=0.01):
+    common_features = set(df1.columns) & set(df2.columns)
+    features_stats = []
+    for col in common_features:
+        # H0=same central parameter
+        delta_test, delta_pvalue = stats.mannwhitneyu(df1[col], df2[col])
+        if delta_pvalue > alpha:
+            delta = 'Same central parameter'
+        else:
+            delta = 'Different central parameter'
+        # H0=equality of the scale parameters
+        scale1_test, scale1_pval = stats.ansari(df1[col], df2[col])
+        if scale1_pval > alpha:
+            scale1 = 'Same scale AnsariTest'
+        else:
+            scale1 = 'Different scale AnsariTest'
+        # H0=equality of the scale parameters
+        scale2_test, scale2_pval = stats.mood(df1[col], df2[col])
+        if scale2_pval > alpha:
+            scale2 = 'Same scale MoodTest'
+        else:
+            scale2 = 'Different scale MoodTest'
+        features_stats.append([col, delta_pvalue, delta, scale1_pval, scale1, scale2_pval, scale2])
+    features_stats = pd.DataFrame(features_stats)
+    features_stats.columns = ['col_name', 'delta_pval', 'delta_status', \
+                              'scale1_pval', 'scale1_status', 'scale2_pval', 'scale2_status']
+    return features_stats
+
+
+def upd_dicted_dict(d, key, value):
+    # presupposes value is a dict
+    if key not in d:
+        d[key] = {}
+    d[key].update(value)
+    return d
+
+
+def features_corrs(df, features, pears=True, spear=True, connection='weak', alpha=0.03):
+    start = dt.now()
+    features_combs = [i for i in combinations(features, 2)]
+    print 'features pairs to check: {}'.format(len(features_combs))
+    mutual_corrs = {}
+
+    for f_cols in tqdm(features_combs):
+        ps_pval1 = None
+        sp_pval1 = None
+        ps_pval2 = None
+        sp_pval2 = None
+        if pears:
+            ps_stat1, ps_pval1 = pearsonr(joined_romir[f_cols[0]], joined_romir[f_cols[1]])
+            ps_stat2, ps_pval2 = pearsonr(joined_romir[f_cols[1]], joined_romir[f_cols[0]])
+        if spear:
+            sp_stat1, sp_pval1 = spearmanr(joined_romir[f_cols[0]], joined_romir[f_cols[1]])
+            sp_stat2, sp_pval2 = spearmanr(joined_romir[f_cols[1]], joined_romir[f_cols[0]])
+
+        if ((ps_pval1 > alpha) or (sp_pval1 > alpha)):
+            mutual_corrs = upd_dicted_dict(mutual_corrs, f_cols[0], {f_cols[1]: 1})
+        if ((ps_pval2 > alpha) or (sp_pval2 > alpha)):
+            mutual_corrs = upd_dicted_dict(mutual_corrs, f_cols[1], {f_cols[0]: 1})
+
+    mutual_corrs = pd.DataFrame(mutual_corrs, dtype=int)
+    mutual_corrs = mutual_corrs.fillna(0)
+    print 'graph nodes amount = {}'.format(mutual_corrs.shape[0])
+    G_sparse = csr_matrix(mutual_corrs.values)
+    comps, lables = csgraph.connected_components(G_sparse, directed=False, connection=connection)
+    print 'total performance duration = ', dt.now() - start
+    return comps, lables, mutual_corrs
